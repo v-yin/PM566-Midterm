@@ -17,6 +17,9 @@ library(knitr)
 library(forcats)
 library(utils)
 library(downloader)
+library(ggmap)
+library(leaflet)
+library(leaflet.extras)
 ```
 
 # Introduction
@@ -52,7 +55,6 @@ if (!file.exists("LAChealth.csv"))
     )
 health <- read.csv("LAChealth.csv")
 
-
 health$GEONAME <- toupper(health$GEONAME)
 health$GEONAME <- replace(health$GEONAME, health$GEONAME=="LOS ANGELES, CITY OF", "LOS ANGELES")
 
@@ -69,14 +71,44 @@ resthealth <- data.table(resthealth)
 
 ## Data Exploration
 
-Data were explored utilizing R package ggplot2 ... Implausibly low scores were deleted (score less than 50, of which there was 1 value with score 3). Average scores within cities were computed and compared. Restaurant chains were identified using the grepl function.
+Data were explored utilizing R package ggplot2 to create a histogram of scores. Implausibly low scores were deleted (score less than 50, of which there was 1 value with score 3). Average scores within cities were computed and compared. Restaurant chains were identified through tokenizing words as bigrams, and looking to see most common chain restaurants. The following set of 9 chains were selected: McDonald's, Jack in the Box, Starbucks, El Pollo Loco, Panda Express, Taco Bell, Del Taco, In N Out, Panera Bread. Average chain inspection scores were computed and compared. Measures of public health were selected: proportion with depression, proportion with obesity, proportion with diabetes. To explore a chain restaurant inspections scores with its surrounding city's health, average score for a chain restaurant was calculated.
+
+In the future, I hope to use OpenStreetMaps API to gather lattitude and longitude data for each restaurant. For now, I was able to use geocode_zip to gather lattitude and longitude for most zip codes in the dataset. The zip codes' average inspection score, proportion of diabetes, obesity, and depression were calculated. Heat maps of the averages were created to compare spatially where clean/dirty restaurants are in relation to proportion of the population with Diabetes, obesity, or depression.
 
 ```{r data exploration}
 # Delete scores less than 50
 library(data.table)
 resthealth <- resthealth[SCORE>50]
-#Find average inspection score by city
-
+# Find average inspection score by city
+city_avg <- resthealth[ , .(
+  scoreavg = mean(SCORE) 
+), by = "FACILITY_CITY"]
+# Find restaurant chains
+# resthealth %>% unnest_ngrams(word, FACILITY_NAME, n=2) %>% anti_join(stop_words, by = c("word")) %>% count(word, sort=TRUE) %>% as_tibble() %>% print(n=100)
+# Create chain variable
+resthealth$FACILITY_NAME <- toupper(resthealth$FACILITY_NAME)
+resthealth$CHAIN <- ifelse(grepl("MCDONALD", resthealth$FACILITY_NAME), "McDonald's", ifelse(grepl("JACK IN THE BOX", resthealth$FACILITY_NAME), "Jack in the Box", ifelse(grepl("STARBUCKS", resthealth$FACILITY_NAME), "Starbucks", ifelse(grepl("EL POLLO LOCO", resthealth$FACILITY_NAME), "El Pollo Loco", ifelse(grepl("PANDA EXPRESS", resthealth$FACILITY_NAME), "Panda Express", ifelse(grepl("TACO BELL", resthealth$FACILITY_NAME), "Taco Bell", ifelse(grepl("DEL TACO", resthealth$FACILITY_NAME), "Del Taco", ifelse(grepl("OUT BURGER", resthealth$FACILITY_NAME), "In N Out", ifelse(grepl("PANERA BREAD", resthealth$FACILITY_NAME), "Panera Bread", NA)))))))))
+# Find average inspection score by city
+chain_avg <- resthealth[ , .(
+  scoreavg = mean(SCORE) 
+), by = "CHAIN"]
+# Clean health outcome data to be numeric
+resthealth$Prop_obse <- as.numeric(as.character(resthealth$Prop_obse))
+resthealth$Prop_DM <- as.numeric(as.character(resthealth$Prop_DM))
+# Average score by restaurant
+zip_avg <- resthealth[ , (ZipAvg = mean(SCORE, by = "FACILITY_ZIP")), list(FACILITY_NAME, FACILITY_ADDRESS, FACILITY_CITY, FACILITY_STATE, FACILITY_ZIP, Prop_DM, Prop_obse, Prop_depr) ]
+zip_avg$FACILITY_ZIP <- as.character(zip_avg$FACILITY_ZIP)
+# geocode to get lattitude and longitude by zip code
+library(zipcodeR)
+zip_cord <- geocode_zip(zip_avg$FACILITY_ZIP)
+zip <- merge(
+  x = zip_avg,
+  y = zip_cord,
+  by.x = "FACILITY_ZIP",
+  by.y = "zipcode",
+  all.x = TRUE,
+  all.y= FALSE
+)
 ```
 
 
@@ -93,6 +125,55 @@ scorehisto <- ggplot(resthealth, aes(x=SCORE)) +
   xlab("Inspection Score")
 scorehisto
 ```
+
+
+Of the 66 cities included in this analysis, Long Beach had the highest average city inspection score. The city with the worst average score was Monterey Park.
+```{r ranking city averages}
+city_avg %>% arrange(desc(scoreavg)) %>% slice(1:5) %>% knitr::kable(col.names = c("City", "Average Score"), caption = "Top 5 Cities")
+
+city_avg %>% arrange(scoreavg) %>% slice(1:5) %>% knitr::kable(col.names = c("City", "Average Score"), caption = "Bottom 5 Cities")
+```
+Of the chain restaurants examined, Panda Express had the best average score, whereas Del Taco had the lowest average score. Cities with Starbucks and Panera appeared to have the lowest proportion of diabetes. However, depression was highest in cities with Starbucks and Panda Express. Cities with Del Taco and Panera Bread had the highest amount of obesity.
+```{r ranking by chain average}
+chain_avg %>% na.omit() %>% arrange(desc(scoreavg)) %>% slice(1:10) %>% knitr::kable(col.names = c("Chain", "Average Score"), caption = "Chain Ranking")
+
+resthealth[ , .(
+  avgDM = mean(Prop_DM, na.rm = T),
+  avgMDD = mean(Prop_depr, na.rm = T),
+  avgOB = mean(Prop_obse, na.rm = T)
+), by = "CHAIN"] %>% na.omit() %>% as_tibble() %>% knitr::kable(col.names= c("Chain", "Average Proportion Diabetes", "Average Proportion Depression", "Average Proportion Obesity"), caption = "Proportion of Diabetes, Depression, and Obesity in surrounding city by chain restaurant")
+```
+
+## Is there a correlation between restaurant inspection score and surrounding city health?
+
+
+
+```{r correlation}
+score.pal <- colorNumeric("inferno", domain=zip$V1)
+scoremap <- leaflet(zip) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addCircles(
+    lat = ~lat, lng = ~lng,
+    label = ~paste0(V1), color = ~score.pal(V1),
+    opacity = 1, fillOpacity = 1, radius = 200
+  ) %>%
+  addLegend("bottomright", pal=score.pal, values = zip$V1, title= "Inspection Score", opacity=1) %>% addTiles()
+scoremap
+
+DM.pal <- colorNumeric("viridis", domain=zip$Prop_DM)
+DMmap <- leaflet(zip) %>%
+    addProviderTiles("CartoDB.Positron") %>%
+  addCircles(
+    lat = ~lat, lng = ~lng,
+    label = ~paste0(V1), color = ~DM.pal(Prop_DM),
+    opacity = 1, fillOpacity = 1, radius = 200
+  ) %>%
+  addLegend("bottomright", pal=DM.pal, values = zip$Prop_DM, title= "Proportion in City with Diabetes", opacity=1) %>% addTiles()
+DMmap
+
+```
+
+
 
 # Conclusion
 
