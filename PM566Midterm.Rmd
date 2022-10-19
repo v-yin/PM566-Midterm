@@ -5,9 +5,94 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
-```{r setup, include=FALSE, cache=TRUE}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidytext)
+library(tidyverse)
+library(dtplyr)
+library(knitr)
+library(forcats)
+library(utils)
+library(downloader)
+```
+
+# Introduction
+
+Los Angeles County provides openly available data on all restaurant and market inspections over the past 5 years. Facilities are subject to inspection 1 to 3 times a year, and made public within 1 week of inspection date. The frequency in which restaurants and food markets are inspected depends on the public health risk associated with the food products served or prepared and on the facility's history of inspection grades. Inspectors deduct points based on violations and health risks, which is turned into a score out of 100. In addition, Los Angeles County data from 2018 on population health is publicly available. Demographic data, such as age and race distribution, socioeconomic data, such as proportion receiving EBT and proportion employed, and health outcomes data, such as proportion with asthma and rates of suicide, are provided for 87 cities within Los Angeles County.
+
+## Objective
+
+I am interested in exploring restaurant inspection ratings in LA County. I have a few questions, with the main one being: Are restaurant inspection ratings associated with community health status? 
+Secondary questions include:
+What are the "safest" and most "dangerous" cities in LA County for eating restaurant food? What restaurant chain is the "safest" to eat at? What restaurant chains should one proceed with caution?
+
+# Methods
+## Reading in and wrangling the data
+
+I used 2 data sets which I merged together for this project. Both are available at data.lacounty.gov to download as CSV (I have also uploaded these datasets to my github repository). The first is a dataset of all LA County restaurant inspections. I added LA County city health data to see if there were any relationships between public health outcomes and local restaurant hygiene. These datasets were merged by city name, and no restaurant was missing its city in the first dataset. City names were briefly inspected to ensure matching would be feasible. As Los Angeles had many sub-cities for which there was health data, I only included the "City of Los Angeles" data to represent the local public health for any restaurant with city listed as Los Angeles. Only restaurants in cities with health data were included in this analysis. 
+
+```{r read in/merge, cache=TRUE}
+if (!file.exists("LACinspections.csv.zip"))
+  download(
+    url = "https://github.com/v-yin/PM566-Midterm/blob/main/LACinspections.csv.zip",
+    dest = "LACinspections.csv.zip",
+    mode="wb"
+    )
+unzip("LACinspections.csv.zip", exdir="./")
+inspect <- read.csv("LACinspections.csv")
+
+if (!file.exists("LAChealth.csv"))
+  download(
+    url = "https://github.com/v-yin/PM566-Midterm/blob/main/LAChealth.csv",
+    dest = "LAChealth.csv",
+    mode="wb"
+    )
+health <- read.csv("LAChealth.csv")
+
+
+health$GEONAME <- toupper(health$GEONAME)
+health$GEONAME <- replace(health$GEONAME, health$GEONAME=="LOS ANGELES, CITY OF", "LOS ANGELES")
+
+resthealth <- merge(
+  x = inspect,
+  y = health,
+  by.x = "FACILITY_CITY",
+  by.y = "GEONAME",
+  all.x = FALSE,
+  all.y = FALSE
+)
+resthealth <- data.table(resthealth)
+```
+
+## Data Exploration
+
+Data were explored utilizing R package ggplot2 ... Implausibly low scores were deleted (score less than 50, of which there was 1 value with score 3). Average scores within cities were computed and compared. Restaurant chains were identified using the grepl function.
+
+```{r data exploration}
+# Delete scores less than 50
+library(data.table)
+resthealth <- resthealth[SCORE>50]
+#Find average inspection score by city
 
 ```
 
-## PM566 Midterm Project
+
+# Preliminary Results
+In total, there were `r nrow(resthealth)` inspections of `r n_distinct(resthealth$FACILITY_ID)` restaurants in `r n_distinct(resthealth$FACILITY_CITY)` cities within LA County.
+
+Of the `r nrow(resthealth)` inspections included in the analysis, the average grade was `r mean(resthealth$SCORE)` with a standard deviation of `r sd(resthealth$SCORE)`. The highest score was a perfect score, `r max(resthealth$SCORE)` whereas the lowest score was `r min(resthealth$SCORE)`. Interestingly, there appears to be a peak at 90, which corresponds to the lowest possible score to achieve an A rating. This may hint at bias involved in the inspection grading process.
+
+```{r histogram of scores}
+library(ggplot2)
+scorehisto <- ggplot(resthealth, aes(x=SCORE)) +
+  geom_histogram(binwidth=1, fill="red") +
+  ggtitle("Distribution of LA County Restaurant Inspection Scores, 2017-2022") +
+  xlab("Inspection Score")
+scorehisto
+```
+
+# Conclusion
+
