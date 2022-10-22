@@ -20,6 +20,7 @@ library(downloader)
 library(ggmap)
 library(leaflet)
 library(leaflet.extras)
+
 ```
 
 # Introduction
@@ -40,7 +41,7 @@ I used 2 data sets which I merged together for this project. Both are available 
 ```{r read in/merge, cache=TRUE}
 if (!file.exists("LACinspections.csv.zip"))
   download(
-    url = "https://github.com/v-yin/PM566-Midterm/blob/main/LACinspections.csv.zip",
+    url = "https://raw.githubusercontent.com/v-yin/PM566-Midterm/LACinspections.csv.zip",
     dest = "LACinspections.csv.zip",
     mode="wb"
     )
@@ -49,7 +50,7 @@ inspect <- read.csv("LACinspections.csv")
 
 if (!file.exists("LAChealth.csv"))
   download(
-    url = "https://github.com/v-yin/PM566-Midterm/blob/main/LAChealth.csv",
+    url = "https://raw.githubusercontent.com/v-yin/PM566-Midterm/main/LAChealth.csv",
     dest = "LAChealth.csv",
     mode="wb"
     )
@@ -73,7 +74,7 @@ resthealth <- data.table(resthealth)
 
 Data were explored utilizing R package ggplot2 to create a histogram of scores. Implausibly low scores were deleted (score less than 50, of which there was 1 value with score 3). Average scores within cities were computed and compared. Restaurant chains were identified through tokenizing words as bigrams, and looking to see most common chain restaurants. The following set of 9 chains were selected: McDonald's, Jack in the Box, Starbucks, El Pollo Loco, Panda Express, Taco Bell, Del Taco, In N Out, Panera Bread. Average chain inspection scores were computed and compared. Measures of public health were selected: proportion with depression, proportion with obesity, proportion with diabetes. To explore a chain restaurant inspections scores with its surrounding city's health, average score for a chain restaurant was calculated.
 
-In the future, I hope to use OpenStreetMaps API to gather lattitude and longitude data for each restaurant. For now, I was able to use geocode_zip to gather lattitude and longitude for most zip codes in the dataset. The zip codes' average inspection score, proportion of diabetes, obesity, and depression were calculated. Heat maps of the averages were created to compare spatially where clean/dirty restaurants are in relation to proportion of the population with Diabetes, obesity, or depression.
+In the future, I hope to use OpenStreetMaps API to gather latitude and longitude data for each restaurant. For now, I was able to use geocode_zip to gather lattitude and longitude for most zip codes in the dataset. The zip codes' average inspection score, proportion of diabetes, obesity, and depression were calculated. Heat maps of the averages were created to compare spatially where clean/dirty restaurants are in relation to proportion of the population with Diabetes, obesity, or depression.
 
 ```{r data exploration}
 # Delete scores less than 50
@@ -84,7 +85,7 @@ city_avg <- resthealth[ , .(
   scoreavg = mean(SCORE) 
 ), by = "FACILITY_CITY"]
 # Find restaurant chains
-# resthealth %>% unnest_ngrams(word, FACILITY_NAME, n=2) %>% anti_join(stop_words, by = c("word")) %>% count(word, sort=TRUE) %>% as_tibble() %>% print(n=100)
+resthealth %>% unnest_ngrams(word, FACILITY_NAME, n=2) %>% anti_join(stop_words, by = c("word")) %>% count(word, sort=TRUE) # %>% as_tibble() %>% print(n=100)
 # Create chain variable
 resthealth$FACILITY_NAME <- toupper(resthealth$FACILITY_NAME)
 resthealth$CHAIN <- ifelse(grepl("MCDONALD", resthealth$FACILITY_NAME), "McDonald's", ifelse(grepl("JACK IN THE BOX", resthealth$FACILITY_NAME), "Jack in the Box", ifelse(grepl("STARBUCKS", resthealth$FACILITY_NAME), "Starbucks", ifelse(grepl("EL POLLO LOCO", resthealth$FACILITY_NAME), "El Pollo Loco", ifelse(grepl("PANDA EXPRESS", resthealth$FACILITY_NAME), "Panda Express", ifelse(grepl("TACO BELL", resthealth$FACILITY_NAME), "Taco Bell", ifelse(grepl("DEL TACO", resthealth$FACILITY_NAME), "Del Taco", ifelse(grepl("OUT BURGER", resthealth$FACILITY_NAME), "In N Out", ifelse(grepl("PANERA BREAD", resthealth$FACILITY_NAME), "Panera Bread", NA)))))))))
@@ -109,6 +110,13 @@ zip <- merge(
   all.x = TRUE,
   all.y= FALSE
 )
+
+# attempt to get restaurant lat/lng
+# failed: geocode_osm , can't install SUNGEO
+# failed: tidygeocoder,  takes hours
+# myaddress.df <- resthealth[, query := paste0(FACILITY_ADDRESS, ", ", FACILITY_CITY, ", CA ", FACILITY_ZIP)]
+
+# address <- geo(address = myaddress.df$query, method = "osm")
 ```
 
 
@@ -147,8 +155,8 @@ resthealth[ , .(
 ## Is there a correlation between restaurant inspection score and surrounding city health?
 
 
-
-```{r correlation}
+While most zip codes appear to have a decent average health inspection score (90+), there appear to be some areas where scores are lower. These include El Monte/Covina, Compton, and Central LA (West Adams). There even appears to be one zip code in Santa Monica with a poor average inspection score. In the following maps, I will explore spatial patterns in proportion of diabetes, obesity, and depression to see if it mirrors patterns found in the food inspection scores by zip code.
+```{r score heat map}
 score.pal <- colorNumeric("inferno", domain=zip$V1)
 scoremap <- leaflet(zip) %>%
   addProviderTiles("CartoDB.Positron") %>%
@@ -157,23 +165,64 @@ scoremap <- leaflet(zip) %>%
     label = ~paste0(V1), color = ~score.pal(V1),
     opacity = 1, fillOpacity = 1, radius = 200
   ) %>%
-  addLegend("bottomright", pal=score.pal, values = zip$V1, title= "Inspection Score", opacity=1) %>% addTiles()
+  addLegend("bottomright", pal=score.pal, values = zip$V1, title= "Inspection Score", opacity=1) %>% addTiles() %>%
+  addControl("Average Inspection Scores by Zip Code", position = "bottomleft")
 scoremap
 
+
+```
+
+
+The distribution of the population proportion of diabetes in LA County has a clearer spatial pattern than those of restaurant inspection scores. It appears that diabetes is lowest in communities bordering the ocean and Glendale. Diabetes is most prevalent in South/Southwest/Southeast Los Angeles. These are also some of the communities where restaurant scores are lower.
+
+```{r DM heat map}
 DM.pal <- colorNumeric("viridis", domain=zip$Prop_DM)
 DMmap <- leaflet(zip) %>%
     addProviderTiles("CartoDB.Positron") %>%
   addCircles(
     lat = ~lat, lng = ~lng,
-    label = ~paste0(V1), color = ~DM.pal(Prop_DM),
+    label = ~paste0(Prop_DM), color = ~DM.pal(Prop_DM),
     opacity = 1, fillOpacity = 1, radius = 200
   ) %>%
   addLegend("bottomright", pal=DM.pal, values = zip$Prop_DM, title= "Proportion in City with Diabetes", opacity=1) %>% addTiles()
 DMmap
-
 ```
 
 
+Obesity proportion by city follows patterns similar to that of Diabetes. It appears that the city of Inglewood has one of the highest proportion of obesity, and it also does have poorer food inspection grades. South LA appears to be one of the areas with worst restaurant inspection scores and highest in comorbidities.
+
+```{r Obesity heat map}
+ob.pal <- colorNumeric("plasma", domain=zip$Prop_obse)
+obmap <- leaflet(zip) %>%
+    addProviderTiles("CartoDB.Positron") %>%
+  addCircles(
+    lat = ~lat, lng = ~lng,
+    label = ~paste0(Prop_obse), color = ~ob.pal(Prop_obse),
+    opacity = 1, fillOpacity = 1, radius = 200
+  ) %>%
+  addLegend("bottomright", pal=ob.pal, values = zip$Prop_obse, title= "Proportion in City with Obesity", opacity=1) %>% addTiles()
+obmap
+```
+
+Interestingly, depression appears to take a different spatial pattern than diabetes and obesity. Here, depression is clustered around Santa Monica, with one zip code highly prevalent in depression near Inglewood. It does not seem that restaurant hygeine correlates strongly with depression proportions.
+
+```{r depression heat map}
+dep.pal <- colorNumeric("BuPu", domain=zip$Prop_depr)
+depmap <- leaflet(zip) %>%
+    addProviderTiles("CartoDB.Positron") %>%
+  addCircles(
+    lat = ~lat, lng = ~lng,
+    label = ~paste0(Prop_depr), color = ~dep.pal(Prop_depr),
+    opacity = 1, fillOpacity = 1, radius = 200
+  ) %>%
+  addLegend("bottomright", pal=dep.pal, values = zip$Prop_depr, title= "Proportion in City with Depression", opacity=1) %>% addTiles()
+depmap
+```
+
 
 # Conclusion
+
+There appears to be some correlation between poor health and poor restaurant inspection scores. The communities where this was apparent were clustered in South LA (ie Compton, Inglewood), and Eastern Los Angeles. Inglewood appears to be one of the hardest hit cities with regards to poor inspection scores, high proportion of diabetes and obesity, and high proportion of depression. The safest chain restaurant appears to be Panda Express, whereas one should be cautious of Del Taco. San Gabriel Valley cities, like Monterey Park, Alhambra, and Rowland Heights, were found to have the lowest inspection scores in LA County.
+
+
 
